@@ -10,34 +10,72 @@ import {
   Sun, 
   ArrowUpRight, 
   ArrowRight, 
-  Instagram, 
-  Youtube, 
-  Linkedin, 
-  Twitter,
-  Home,
-  Compass,
+  ExternalLink, 
+  Mail, 
+  MapPin, 
+  Lock, 
+  X, 
+  Plus, 
+  Trash2, 
+  LogOut, 
+  Download,
+  Share2,
+  Settings,
+  Save,
   Sparkles,
   User,
-  Settings,
-  X,
-  Plus,
-  Trash2,
-  Save,
-  Lock
+  Instagram,
+  Linkedin,
+  Youtube,
+  Twitter,
+  Home,
+  Compass
 } from "lucide-react";
 import { initialData, PortfolioData, SnsItem, JournalItem } from "./data";
 
 export default function App() {
   // Data State
   const [data, setData] = useState<PortfolioData>(() => {
+    // 1. URL 매개변수 확인 (?d=...) : 기기 간 동기화용
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const dataParam = urlParams.get("d");
+      
+      if (dataParam) {
+        try {
+          // Base64 디코딩 (한글 포함 유니코드 대응)
+          const jsonStr = decodeURIComponent(escape(window.atob(dataParam)));
+          const importedData = JSON.parse(jsonStr);
+          localStorage.setItem("portfolio_data", jsonStr);
+          // URL 파라미터 제거
+          window.history.replaceState({}, document.title, window.location.pathname);
+          return importedData;
+        } catch (e) {
+          console.error("URL 데이터 파싱 실패", e);
+        }
+      }
+    }
+
     const saved = localStorage.getItem("portfolio_data");
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        // 버전이 다르거나 없을 경우 최신 데이터(initialData)로 갱신
+        // 버전이 다르거나 없을 경우 마이그레이션 수행
         if (!parsed.version || parsed.version < initialData.version) {
-          console.log("New version detected, updating data to", initialData.version);
-          return initialData;
+          console.log("New version detected, merging data...");
+          // 기존 데이터 보존하면서 신규 필드(url 등) 추가
+          return {
+            ...initialData,
+            ...parsed,
+            profile: { ...initialData.profile, ...parsed.profile },
+            // 배열 데이터의 경우 각 요소에 누락된 필드 보완
+            journal: (parsed.journal || initialData.journal).map((item: any) => ({
+              ...(initialData.journal.find(j => j.id === item.id) || {}),
+              ...item,
+              url: item.url || "#"
+            })),
+            version: initialData.version
+          };
         }
         return parsed;
       } catch (e) {
@@ -53,15 +91,55 @@ export default function App() {
   const [showLogin, setShowLogin] = useState(false);
   const [password, setPassword] = useState("");
   const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   // Persistence
-  const handleSave = () => {
-    const updatedData = { ...data, version: initialData.version };
-    localStorage.setItem("portfolio_data", JSON.stringify(updatedData));
-    setData(updatedData);
-    setIsAdmin(false); // 저장 후 관리자 모드 해제
-    alert("데이터가 성공적으로 저장되었습니다.");
-    setShowAdminPanel(false);
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      const updatedData = { ...data, version: initialData.version };
+      
+      // 1. 로컬 저장 (즉시 반영)
+      localStorage.setItem("portfolio_data", JSON.stringify(updatedData));
+      setData(updatedData);
+      
+      // 2. 전역 저장 (GitHub API 호출)
+      const response = await fetch('/api/save-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: updatedData }),
+      });
+
+      const result = await response.json();
+
+      if (response.ok) {
+        alert("성공적으로 저장되었습니다!\n\nGitHub 코드가 업데이트되었으며, Vercel에서 자동으로 다시 배포를 시작합니다. 약 1~2분 후 모든 기기(스마트폰 포함)에서 반영된 것을 확인하실 수 있습니다.");
+        setIsAdmin(false);
+        setShowAdminPanel(false);
+      } else {
+        throw new Error(result.error || '전역 저장 실패');
+      }
+    } catch (e: any) {
+      console.error("Save error:", e);
+      alert(`저장 중 오류가 발생했습니다: ${e.message}\n\n(로컬 브라우저에는 임시로 저장되었습니다.)`);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleGenerateSyncLink = () => {
+    try {
+      // JSON -> Base64 (유니코드 대응)
+      const jsonStr = JSON.stringify(data);
+      const base64 = window.btoa(unescape(encodeURIComponent(jsonStr)));
+      const syncUrl = `${window.location.origin}${window.location.pathname}?d=${base64}`;
+      
+      navigator.clipboard.writeText(syncUrl);
+      alert("동기화 링크가 클립보드에 복사되었습니다!\n이 링크를 스마트폰에서 열면 데이터가 즉시 적용됩니다.");
+    } catch (e) {
+      console.error("Failed to generate sync link", e);
+      alert("링크 생성에 실패했습니다.");
+    }
   };
 
   const handleLogin = () => {
@@ -375,9 +453,17 @@ export default function App() {
             <div className="p-8 space-y-10">
               <div className="flex justify-between items-center sticky top-0 bg-[#1a191b] py-2 z-10 border-b border-white/5">
                 <h2 className="text-2xl font-bold font-headline text-[#aaffdc]">관리자 패널</h2>
-                <div className="flex gap-2">
-                  <button 
-                    onClick={() => {
+                  <div className="flex items-center gap-2">
+                    <button 
+                      onClick={handleGenerateSyncLink}
+                      className="px-3 py-1.5 bg-[#aaffdc]/10 hover:bg-[#aaffdc]/20 text-[#aaffdc] text-xs rounded-lg border border-[#aaffdc]/20 transition-all flex items-center gap-1.5"
+                      title="스마트폰 등 다른 기기로 데이터를 전송할 수 있는 링크를 생성합니다."
+                    >
+                      <Share2 size={12} />
+                      동기화 링크 생성
+                    </button>
+                    <button 
+                      onClick={() => {
                       const json = JSON.stringify(data, null, 2);
                       const blob = new Blob([json], { type: "application/json" });
                       const url = URL.createObjectURL(blob);
@@ -387,16 +473,36 @@ export default function App() {
                       a.click();
                       alert("데이터가 JSON 파일로 다운로드되었습니다. 이 내용을 src/data.ts의 initialData에 붙여넣으면 영구적으로 반영됩니다.");
                     }}
-                    className="flex items-center gap-2 bg-white/10 text-white font-bold px-4 py-2 rounded-lg text-sm hover:bg-white/20"
-                  >
-                    내보내기
-                  </button>
+                      className="px-3 py-1.5 bg-white/5 hover:bg-white/10 text-white text-xs rounded-lg border border-white/10 transition-all"
+                      title="전체 데이터를 JSON 파일로 다운로드합니다. 이 파일을 src/data.ts에 붙여넣으면 영구적으로 반영됩니다."
+                    >
+                      내보내기
+                    </button>
                   <button 
                     onClick={handleSave}
-                    className="flex items-center gap-2 bg-[#aaffdc] text-[#00654b] font-bold px-4 py-2 rounded-lg text-sm"
+                    disabled={isSaving}
+                    className={`flex items-center gap-2 font-bold px-4 py-2 rounded-lg text-sm transition-all ${
+                      isSaving 
+                      ? "bg-[#aaffdc]/50 text-[#00654b] cursor-not-allowed" 
+                      : "bg-[#aaffdc] text-[#00654b] hover:shadow-[0_0_20px_rgba(170,255,220,0.4)]"
+                    }`}
                   >
-                    <Save className="w-4 h-4" />
-                    저장
+                    {isSaving ? (
+                      <>
+                        <motion.div 
+                          animate={{ rotate: 360 }}
+                          transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
+                        >
+                          <Compass size={16} />
+                        </motion.div>
+                        배포 중...
+                      </>
+                    ) : (
+                      <>
+                        <Save size={16} />
+                        저장 및 배포
+                      </>
+                    )}
                   </button>
                   <X className="w-6 h-6 cursor-pointer text-[#adaaab]" onClick={() => setShowAdminPanel(false)} />
                 </div>
